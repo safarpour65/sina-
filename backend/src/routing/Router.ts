@@ -1,141 +1,69 @@
-/**
- * Routing Layer - Intelligent provider and workflow selection
- */
-
-import {
-  JobType,
-  ProviderCapability,
-  RoutingContext,
-  RoutingDecision,
-  UserPreferences,
-} from '../types';
+import logger from '../utils/logger';
+import { AgnesProvider } from '../providers/agnes/AgnesProvider';
 import { IProvider } from '../providers/interfaces/IProvider';
-import logger from './logger';
-import { ServiceUnavailableError } from '../types/errors';
 
-/**
- * Routing strategy interface
- */
-interface RoutingStrategy {
-  selectProvider(
-    capabilities: ProviderCapability[],
-    availableProviders: IProvider[],
-    context: RoutingContext,
-  ): Promise<IProvider | null>;
+export interface RoutingContext {
+  type: string;
+  qualityRequired?: 'low' | 'medium' | 'high';
+  costConstraint?: number;
+  userPreference?: string;
 }
 
-/**
- * Default routing strategy - selects provider based on capability, availability, and user preference
- */
-class DefaultRoutingStrategy implements RoutingStrategy {
-  async selectProvider(
-    capabilities: ProviderCapability[],
-    availableProviders: IProvider[],
-    context: RoutingContext,
-  ): Promise<IProvider | null> {
-    // Filter providers that support all required capabilities
-    const capableProviders = availableProviders.filter((provider) =>
-      capabilities.every((cap) => provider.capabilities.includes(cap)),
+export class Router {
+  private providers: Map<string, IProvider> = new Map();
+
+  constructor() {
+    this.initializeProviders();
+  }
+
+  private async initializeProviders() {
+    try {
+      const agnesProvider = new AgnesProvider();
+      await agnesProvider.initialize({
+        name: 'agnes',
+        timeout: 300000,
+      });
+      this.providers.set('agnes', agnesProvider);
+      logger.info('Router initialized with providers');
+    } catch (error) {
+      logger.error('Failed to initialize providers', error);
+    }
+  }
+
+  async selectProvider(context: RoutingContext): Promise<IProvider> {
+    logger.info(`Selecting provider for ${context.type}`);
+
+    // Filter providers by capability
+    const capableProviders = Array.from(this.providers.values()).filter((p) =>
+      p.capabilities.includes(context.type)
     );
 
     if (capableProviders.length === 0) {
-      logger.warn(
-        `No providers available for capabilities: ${capabilities.join(', ')}`,
-      );
-      return null;
+      throw new Error(`No provider available for ${context.type}`);
     }
 
-    // If user has preference, use it if available
-    if (context.userPreferences?.defaultProvider) {
-      const preferred = capableProviders.find(
-        (p) => p.name.toLowerCase() === context.userPreferences?.defaultProvider?.toLowerCase(),
-      );
-      if (preferred) {
-        logger.info(
-          `Selected provider ${preferred.name} based on user preference`,
-        );
-        return preferred;
+    // Check health and rate limits
+    for (const provider of capableProviders) {
+      const isHealthy = await provider.healthCheck();
+      if (isHealthy) {
+        const rateLimit = await provider.getRateLimit();
+        if (rateLimit.remaining > 0) {
+          logger.info(`Selected provider: ${provider.name}`);
+          return provider;
+        }
       }
     }
 
-    // Default: use first available provider
-    logger.info(`Selected provider ${capableProviders[0].name} for capabilities`);
+    // Fallback to first provider if none are healthy
+    logger.warn('No healthy provider found, using fallback');
     return capableProviders[0];
   }
-}
 
-/**
- * Router class - Central routing logic
- */
-export class Router {
-  private strategy: RoutingStrategy = new DefaultRoutingStrategy();
-
-  /**
-   * Map job type to required capabilities
-   */
-  private getCapabilitiesForJobType(jobType: JobType): ProviderCapability[] {
-    const capabilityMap: Record<JobType, ProviderCapability[]> = {
-      [JobType.IMAGE_GENERATION]: [ProviderCapability.IMAGE_GENERATION],
-      [JobType.VIDEO_GENERATION]: [ProviderCapability.VIDEO_GENERATION],
-      [JobType.AUDIO_GENERATION]: [ProviderCapability.AUDIO_GENERATION],
-      [JobType.TEXT_TO_SPEECH]: [ProviderCapability.TEXT_TO_SPEECH],
-      [JobType.TEXT_GENERATION]: [ProviderCapability.TEXT_GENERATION],
-      [JobType.CHARACTER_GENERATION]: [ProviderCapability.CHARACTER_GENERATION],
-      [JobType.ASSET_3D_GENERATION]: [ProviderCapability.ASSET_3D_GENERATION],
-      [JobType.GAME_CREATION]: [
-        // Game creation may require multiple capabilities
-        ProviderCapability.IMAGE_GENERATION,
-        ProviderCapability.CHARACTER_GENERATION,
-        ProviderCapability.ASSET_3D_GENERATION,
-      ],
-      [JobType.GAME_BUILD]: [ProviderCapability.IMAGE_GENERATION], // Simplified for now
-      [JobType.ANIMATION_GENERATION]: [ProviderCapability.ANIMATION_GENERATION],
-    };
-
-    return capabilityMap[jobType] || [];
+  getProvider(name: string): IProvider | undefined {
+    return this.providers.get(name);
   }
 
-  /**
-   * Route a job to the best provider
-   */
-  async route(
-    jobType: JobType,
-    availableProviders: IProvider[],
-    userPreferences?: UserPreferences,
-  ): Promise<RoutingDecision> {
-    const capabilities = this.getCapabilitiesForJobType(jobType);
-    const context: RoutingContext = {
-      jobType,
-      capabilities,
-      userPreferences,
-    };
-
-    const selectedProvider = await this.strategy.selectProvider(
-      capabilities,
-      availableProviders,
-      context,
-    );
-
-    if (!selectedProvider) {
-      throw new ServiceUnavailableError(
-        `No provider available for job type: ${jobType}`,
-      );
-    }
-
-    return {
-      providerId: selectedProvider.name,
-      providerName: selectedProvider.name,
-      reasoning: `Selected ${selectedProvider.name} based on capability match and availability`,
-      fallbackProviders: availableProviders
-        .filter((p) => p.name !== selectedProvider.name)
-        .map((p) => p.name),
-    };
-  }
-
-  /**
-   * Set custom routing strategy
-   */
-  setStrategy(strategy: RoutingStrategy): void {
-    this.strategy = strategy;
+  listProviders(): IProvider[] {
+    return Array.from(this.providers.values());
   }
 }

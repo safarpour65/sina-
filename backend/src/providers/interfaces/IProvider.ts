@@ -1,121 +1,80 @@
-/**
- * Provider Interface - Core abstraction for AI providers
- */
-
-import {
-  ProviderCapability,
-  ProviderConfig,
-  ProviderHealthCheck,
-  ValidationResult,
-  JobType,
-  IJob,
-} from '../types';
-
-export interface ProviderInitOptions {
-  config: ProviderConfig;
+export interface ProviderConfig {
+  name: string;
   apiKey?: string;
   apiUrl?: string;
+  timeout: number;
+  models?: Record<string, string>;
 }
 
-/**
- * Core provider interface that all AI providers must implement
- * This allows adding new providers without modifying core system logic
- */
+export interface ImageGenParams {
+  prompt: string;
+  model?: string;
+  size?: string;
+  quality?: string;
+  style?: string;
+  seed?: number;
+  steps?: number;
+  cfg_scale?: number;
+  negative_prompt?: string;
+}
+
+export interface VideoGenParams {
+  prompt: string;
+  model?: string;
+  duration?: number;
+  fps?: number;
+  resolution?: string;
+}
+
+export interface AudioGenParams {
+  prompt: string;
+  model?: string;
+  duration?: number;
+  format?: string;
+}
+
+export interface TTSParams {
+  text: string;
+  voice?: string;
+  language?: string;
+  speed?: number;
+  model?: string;
+}
+
+export interface GeneratedContent {
+  id: string;
+  url: string;
+  format: string;
+  duration?: number;
+  size: number;
+  metadata?: Record<string, any>;
+}
+
+export interface RateLimitStatus {
+  remaining: number;
+  resetTime: number;
+  limit: number;
+}
+
+export interface ValidationResult {
+  valid: boolean;
+  errors?: string[];
+}
+
 export interface IProvider {
-  /**
-   * Provider name
-   */
-  readonly name: string;
+  name: string;
+  capabilities: string[];
 
-  /**
-   * List of capabilities this provider supports
-   */
-  readonly capabilities: ProviderCapability[];
+  initialize(config: ProviderConfig): Promise<void>;
 
-  /**
-   * Initialize provider with configuration
-   */
-  initialize(options: ProviderInitOptions): Promise<void>;
+  generateImage(params: ImageGenParams): Promise<GeneratedContent>;
+  generateVideo(params: VideoGenParams): Promise<GeneratedContent>;
+  generateAudio(params: AudioGenParams): Promise<GeneratedContent>;
+  synthesizeSpeech(params: TTSParams): Promise<GeneratedContent>;
 
-  /**
-   * Check if provider is healthy and responsive
-   */
-  healthCheck(): Promise<ProviderHealthCheck>;
+  healthCheck(): Promise<boolean>;
+  getRateLimit(): Promise<RateLimitStatus>;
 
-  /**
-   * Get current rate limit status
-   */
-  getRateLimitStatus(): Promise<{
-    remaining: number;
-    reset: Date;
-    limit: number;
-  }>;
-
-  /**
-   * Execute job based on its type and input
-   */
-  executeJob(job: IJob): Promise<{
-    output: Record<string, any>;
-    metadata?: Record<string, any>;
-  }>;
-
-  /**
-   * Validate input for a specific job type
-   */
-  validateInput(jobType: JobType, input: Record<string, any>): Promise<ValidationResult>;
-
-  /**
-   * Validate provider credentials
-   */
+  validateInput(type: string, input: any): Promise<ValidationResult>;
   validateCredentials(): Promise<boolean>;
-
-  /**
-   * Get supported models for this provider
-   */
-  getSupportedModels(): Promise<Record<string, string[]>>;
-}
-
-/**
- * Base provider class with common functionality
- */
-export abstract class BaseProvider implements IProvider {
-  abstract readonly name: string;
-  abstract readonly capabilities: ProviderCapability[];
-
-  protected config!: ProviderConfig;
-  protected apiKey!: string;
-  protected apiUrl!: string;
-
-  async initialize(options: ProviderInitOptions): Promise<void> {
-    this.config = options.config;
-    this.apiKey = options.apiKey || '';
-    this.apiUrl = options.apiUrl || '';
-
-    if (!this.apiKey && this.config.enabled) {
-      throw new Error(`${this.name} provider requires API key`);
-    }
-
-    await this.validateCredentials();
-  }
-
-  abstract healthCheck(): Promise<ProviderHealthCheck>;
-  abstract getRateLimitStatus(): Promise<{
-    remaining: number;
-    reset: Date;
-    limit: number;
-  }>;
-  abstract executeJob(job: IJob): Promise<{
-    output: Record<string, any>;
-    metadata?: Record<string, any>;
-  }>;
-  abstract validateInput(
-    jobType: JobType,
-    input: Record<string, any>,
-  ): Promise<ValidationResult>;
-  abstract validateCredentials(): Promise<boolean>;
-  abstract getSupportedModels(): Promise<Record<string, string[]>>;
-
-  protected isCapabilitySupported(capability: ProviderCapability): boolean {
-    return this.capabilities.includes(capability);
-  }
 }
